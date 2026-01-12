@@ -1,9 +1,12 @@
 import yt_dlp
+import requests
 from typing import Dict, Any, cast
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-BOT_TOKEN = "8105658961:AAGTz1_FxV8KAUk6pQN9BTA4naMKk-FQ5rM"
+BOT_TOKEN = "PASTE_YOUR_TOKEN_HERE"
+
+REDIRECT_SERVER = "https://video-redirect-server.onrender.com"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -18,7 +21,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     url = msg.text.strip()
-    await msg.reply_text("📡 Link received.\nChoose what you want:")
 
     if context.user_data is None:
         context.user_data = {}
@@ -30,7 +32,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎵 Audio (MP3)", callback_data="mode_audio")]
     ])
 
-    await msg.reply_text("Select format:", reply_markup=keyboard)
+    await msg.reply_text("Choose format:", reply_markup=keyboard)
 
 
 async def mode_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,16 +46,14 @@ async def mode_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Session expired. Send the link again.")
         return
 
-    mode = query.data
     url = context.user_data["url"]
+    mode = query.data
 
     ydl_opts: Dict[str, Any] = {"quiet": True, "skip_download": True}
     ydl = cast(Any, yt_dlp.YoutubeDL(ydl_opts))
     info = ydl.extract_info(url, download=False)
 
     formats = info.get("formats") or []
-
-    buttons = []
     store: Dict[str, str] = {}
 
     if mode == "mode_video":
@@ -62,36 +62,25 @@ async def mode_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 res = f.get("resolution")
                 if res and res not in store:
                     store[res] = f["url"]
-
-        if not store:
-            await query.edit_message_text("❌ No combined video streams found.\n(4K is video-only on YouTube)")
-            return
-
         title = "🎬 Choose video quality"
 
-    else:  # audio
+    else:
         for f in formats:
-            if f.get("acodec") != "none" and f.get("vcodec") == "none" and f.get("url"):
+            if f.get("vcodec") == "none" and f.get("acodec") != "none" and f.get("url"):
                 abr = f.get("abr")
                 if abr:
                     key = f"{int(abr)} kbps"
                     if key not in store:
                         store[key] = f["url"]
-
-        if not store:
-            await query.edit_message_text("❌ No audio streams found.")
-            return
-
         title = "🎵 Choose audio quality"
 
-    if context.user_data is None:
-        context.user_data = {}
+    if not store:
+        await query.edit_message_text("❌ No streams found.")
+        return
 
     context.user_data["streams"] = store
 
-    for k in store:
-        buttons.append([InlineKeyboardButton(k, callback_data=k)])
-
+    buttons = [[InlineKeyboardButton(k, callback_data=k)] for k in store]
     await query.edit_message_text(title, reply_markup=InlineKeyboardMarkup(buttons))
 
 
@@ -113,14 +102,18 @@ async def quality_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Invalid selection.")
         return
 
-    url = streams[choice]
+    real_url = streams[choice]
+
+    # Ask redirect server to generate fast link
+    r = requests.post(f"{REDIRECT_SERVER}/create", json={"url": real_url})
+    fast_url = r.json()["link"]
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬇️ Download Now", url=url)]
+        [InlineKeyboardButton("⬇️ Download Now", url=fast_url)]
     ])
 
     await query.edit_message_text(
-        f"📥 {choice} ready.\nTap below to download:",
+        f"📥 {choice} ready!\nTap below to download at full speed:",
         reply_markup=keyboard
     )
 
